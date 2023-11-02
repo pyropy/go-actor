@@ -2,6 +2,7 @@ package actor
 
 import (
 	"sync"
+	"sync/atomic"
 )
 
 // Actor is computational entity that executes Worker in individual goroutine.
@@ -87,18 +88,15 @@ func New(w Worker, opt ...Option) Actor {
 }
 
 type actor struct {
-	worker            Worker
-	options           options
-	ctx               *context
-	workEndedSigC     chan struct{}
-	workerRunning     bool
-	workerRunningLock sync.Mutex
+	worker        Worker
+	options       options
+	ctx           *context
+	workEndedSigC chan struct{}
+	workerRunning atomic.Bool
 }
 
 func (a *actor) Stop() {
-	a.workerRunningLock.Lock()
-	if !a.workerRunning {
-		a.workerRunningLock.Unlock()
+	if !a.workerRunning.Load() {
 		return
 	}
 
@@ -106,22 +104,17 @@ func (a *actor) Stop() {
 	a.ctx.end()
 	workEndedSigC := a.workEndedSigC
 
-	a.workerRunningLock.Unlock()
-
 	<-workEndedSigC
 }
 
 func (a *actor) Start() {
-	a.workerRunningLock.Lock()
-	defer a.workerRunningLock.Unlock()
-
-	if a.workerRunning {
+	if a.workerRunning.Load() {
 		return
 	}
 
 	a.workEndedSigC = make(chan struct{})
 	a.ctx = newContext()
-	a.workerRunning = true
+	a.workerRunning.Store(true)
 
 	go a.doWork()
 }
@@ -140,10 +133,8 @@ func (a *actor) doWork() {
 	a.onStop()
 
 	{ // Worker has finished
-		a.workerRunningLock.Lock()
-		a.workerRunning = false
+		a.workerRunning.Store(false)
 		close(a.workEndedSigC)
-		a.workerRunningLock.Unlock()
 	}
 }
 
